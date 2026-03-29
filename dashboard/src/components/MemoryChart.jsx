@@ -18,7 +18,7 @@ function MemoryChart({ host, range, systemId }) {
     axios.get(`/metrics/memory?minutes=${range}&host=${host}${systemId ? `&systemId=${systemId}` : ''}`)
       .then(res => {
         const history = res.data.map(d => ({
-          time: new Date(d.time * 1000).toLocaleTimeString(),
+          time: new Date(d.time).toLocaleTimeString(),
           value: d.value
         }));
         setData(history);
@@ -33,7 +33,7 @@ function MemoryChart({ host, range, systemId }) {
       setData(prev => [
         ...prev.slice(-29),
         {
-          time: new Date(msg.timestamp * 1000).toLocaleTimeString(),
+          time: new Date(msg.timestamp).toLocaleTimeString(),
           value: msg.memory
         }
       ]);

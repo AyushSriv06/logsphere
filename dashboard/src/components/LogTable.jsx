@@ -83,7 +83,7 @@ function LogTable({ host, systemId }) {
             {filteredLogs.map((log, i) => (
               <tr key={i} style={{ background: i % 2 ? "#0f172a" : "#111827" }}>
                 <td style={td}>
-                  {new Date(log.time * 1000).toLocaleTimeString()}
+                  {new Date(log.time).toLocaleTimeString()}
                 </td>
                 <td style={td}>{log.host}</td>
                 <td style={{ ...td, color: getSeverityColor(log.message) }}>

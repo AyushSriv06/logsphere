@@ -76,38 +76,39 @@ async function run() {
     const config = JSON.parse(fs.readFileSync("config.json", "utf8"));
     const url = new URL(config.ingestUrl || "http://localhost:5000/ingest");
     const platform = os.platform();
-    let lastSystemLogTime = Date.now();
     const watchedFiles = {};
 
-    console.log("Starting LogSphere Agent v2.0 for:", config.systemId);
+    console.log("Starting LogSphere Agent v2.1 (Aggregated) for:", config.systemId);
     console.log("Platform:", platform);
 
-    // Function to get system logs (Windows/Linux)
-    const getSystemLogs = () => {
-      const logs = [];
-      try {
-        if (platform === "win32") {
-          // Query recent System errors/warnings
-          const cmd = 'wevtutil qe System "/q:*[System[(Level=2 or Level=3)]]" /c:5 /rd:true /f:text';
-          const output = execSync(cmd).toString();
-          if (output.trim()) {
-            logs.push({ message: "Windows System Event: " + output.split("\\n")[0].trim().substring(0, 200), type: "System" });
-          }
-        } else if (platform === "linux") {
-          const output = execSync("journalctl -n 5 --no-pager").toString();
-          output.split("\\n").forEach(line => {
-             if (line.trim()) logs.push({ message: line.trim(), type: "System" });
-          });
-        }
-      } catch (e) { /* ignore command errors */ }
-      return logs;
+    // Helper to extract description from wevtutil output
+    const extractDescription = (text) => {
+      const match = text.match(/Description:\\s*([\\s\\S]*$)/i);
+      if (match && match[1]) return match[1].trim().substring(0, 500);
+      return text.split("\\n")[0].trim(); // Fallback to first line
     };
 
     // Periodic telemetry
     setInterval(() => {
-      const logs = getSystemLogs();
+      let rawLogs = [];
 
-      // Read from configured log paths
+      // 1. Get system logs
+      try {
+        if (platform === "win32") {
+          const cmd = 'wevtutil qe System "/q:*[System[(Level=2 or Level=3)]]" /c:3 /rd:true /f:text';
+          const output = execSync(cmd).toString();
+          if (output.trim()) {
+            rawLogs.push({ message: "Windows System: " + extractDescription(output), type: "System" });
+          }
+        } else if (platform === "linux") {
+          const output = execSync("journalctl -n 5 --no-pager").toString();
+          output.split("\\n").forEach(line => {
+             if (line.trim()) rawLogs.push({ message: line.trim(), type: "System" });
+          });
+        }
+      } catch (e) { /* ignore command errors */ }
+
+      // 2. Read from configured log paths
       (config.logPaths || []).forEach(path => {
         try {
           if (fs.existsSync(path)) {
@@ -121,7 +122,7 @@ async function run() {
               fs.readSync(fd, buffer, 0, currentSize - lastSize, lastSize);
               const newContent = buffer.toString();
               newContent.split("\\n").forEach(line => {
-                if (line.trim()) logs.push({ message: line.trim(), type: "App" });
+                if (line.trim()) rawLogs.push({ message: line.trim(), type: "App" });
               });
               watchedFiles[path] = currentSize;
             }
@@ -130,14 +131,32 @@ async function run() {
         } catch (e) { console.error("Error reading file:", path, e.message); }
       });
 
+      // 3. AGGREGATION LOGIC
+      const aggregatedLogs = [];
+      const logMap = {};
+
+      rawLogs.forEach(log => {
+        const key = log.message + "|" + log.type;
+        if (logMap[key]) {
+          logMap[key].count++;
+        } else {
+          logMap[key] = { ...log, count: 1 };
+        }
+      });
+
+      for (const key in logMap) {
+        aggregatedLogs.push(logMap[key]);
+      }
+
+      // 4. Send Payload
       const payload = JSON.stringify({
         systemId: config.systemId,
         systemKey: config.systemKey,
         host: os.hostname(),
-        cpu: (Math.random() * 20 + 5).toFixed(2), // Real CPU logic could be added here
+        cpu: (Math.random() * 20 + 5).toFixed(2),
         memory: (Math.random() * 30 + 20).toFixed(2),
         processes: 50 + Math.floor(Math.random() * 100),
-        logs: logs,
+        logs: aggregatedLogs,
         timestamp: Date.now()
       });
 
@@ -153,8 +172,8 @@ async function run() {
       };
 
       const req = http.request(options, (res) => {
-        if (res.statusCode === 200) {
-          if (logs.length > 0) console.log("Sent " + logs.length + " logs");
+        if (res.statusCode === 200 && aggregatedLogs.length > 0) {
+          console.log("Sent " + aggregatedLogs.length + " aggregated logs");
         }
       });
       req.on("error", (err) => console.error("Ingest Error:", err.message));
